@@ -1,0 +1,436 @@
+---
+title: "Predicting Unemployment Rate Using U.S Census Data"
+output: 
+    html_document:
+        toc: TRUE
+        toc_float: TRUE
+subtitle: University of Toronto JSC370 Final Project
+---
+
+```{r}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo = FALSE)
+```
+
+
+```{r setup, message=FALSE, echo=FALSE, warning=FALSE}
+library(data.table)
+library(tidyverse)
+library(dplyr)
+library(plotly)
+library(DT)
+library(ipumsr)
+library(knitr)
+library('httr')
+library('xml2')
+library(rvest)
+library('stringr')
+library('readr')
+library(tidytext)
+library(tidyr)
+library(stopwords)
+library(ggplot2)
+library(kableExtra)
+library(jsonlite)
+# INITALIZE CODE CHUNK OPTIONS
+opts_chunk$set(
+  warning = FALSE,
+  message = FALSE,
+  eval=TRUE,
+  echo = FALSE,
+  cache = FALSE)
+```
+
+
+# Introduction
+## Background
+The unemployment rate is considered one of the most important economic indicators. It measures the share of workers in the labor force who do not currently have a job but are actively looking for work. However, the issue of unemployment is a significant concern that has garnered considerable attention in the United States, particularly in the wake of the pandemic. 
+
+Despite efforts to promote equal opportunities for all, disparities still exist between various demographic groups. According to BLS reports(https://www.bls.gov/opub/reports/race-and-ethnicity/2021/home.htm), the unemployment rate averaged 8.6 percent for Blacks, 8.2 percent for American Indians and Alaska Natives, 6.9 percent for Native Hawaiians and Other Pacific Islanders, 5.0 percent for Asians, and 4.7 percent for Whites. 
+## Research Question
+The purpose of this report is to conduct a thorough examination of employment data and its correlation with relevant factors in the United States. By delving into the root causes of employment disparities, we can identify potential solutions that will help to create a more just and equitable society. In particular, we seek to answer the question: "Is there a correlation between unemployment rate and gender, race, and income?"
+
+By conducting this analysis, we hope to shed light on the complex interplay of factors that influence employment in the United States. Through this understanding, we can work towards creating more effective policies and initiatives that promote greater economic and social equity for all Americans.
+
+# Accessibility
+To view the complete pdf report, [click here](https://github.com/cindyellow/JSC370-FinalProject/blob/master/JSC370_FinalProject_Report_Shih-Ting(Cindy)Huang.pdf).
+
+To watch a demonstration of this website, [click here](https://youtube.com).
+
+# Methods
+
+## Data access
+
+Our data come from the DP03 and DP05 tables of the American Community Survey 5-year estimates, which provide detailed information on social, economic, and housing characteristics of the United States population at various geographic levels. Our objective is to explore the relationship between unemployment and variables such as gender, race, and income, as well as identify other underlying patterns that may impact the employment rate.
+```{r}
+kgl_dataset <- function(file_name){
+    user <- fromJSON("kaggle.json", flatten = TRUE)
+    url <- paste0( "https://www.kaggle.com/api/v1/datasets/download/muonneutrino/us-census-demographic-data/", file_name)
+    call <- httr::GET(url, httr::authenticate("naihexiao", "dc003e05b496db6674191ae798c58498", type="basic"))
+    content_type <- call[[3]]$`content-type`
+    temp <- tempfile()
+    download.file(call$url,temp)
+    data <- read.csv(unz(temp, file_name))
+    unlink(temp)
+    return(data)
+}
+data_2015 <- kgl_dataset("acs2015_census_tract_data.csv")
+data_2017 <- kgl_dataset("acs2017_census_tract_data.csv")
+```
+
+
+## Data cleaning and wrangling
+```{r, message=FALSE, echo=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+data <- read.csv("acs2017_census_tract_data.csv")
+```
+
+The dataset is composed of observations at the census tract level. A census tract is a geographic region designated for the purpose of conducting a census, and typically, there are multiple tracts within a county. Census tracts serve as the smallest territorial unit for which population data is collected and made available in many countries. In the United States, census tracts are further subdivided into block groups and census blocks.
+
+
+### Select relevant columns
+
+For the purpose of this analysis, I have determined that the following columns are necessary: "TractId", "State", "County", "TotalPop", "Men", "Women", "Hispanic", "White", "Black", "Native", "Asian", "Pacific", "Income", and "Unemployment". After selecting the columns, the data now contains 74001 rows and 14 columns, here is the top 20 rows of it:
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE}
+library(kableExtra)
+data <- data[, c("TractId", "State", "County", "TotalPop", "Men", "Women", "Hispanic", "White", "Black", "Native", "Asian", "Pacific", "Income", "Unemployment")]
+temp <- head(data, 20)
+kbl(temp, caption = "Data frame after selecting columns")%>%
+  kable_paper() %>%
+  scroll_box(width = "1000px", height = "600px")
+```
+
+
+### Missing values
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE}
+missing_sum <- data %>%
+  summarise(Total_missing = sum(is.na(data)),
+            State_missing = sum(is.na(State)),
+            County_missing = sum(is.na(County)),
+            TotalPop_missing = sum(is.na(TotalPop)),
+            Men_missing = sum(is.na(Men)),
+            Women_missing = sum(is.na(Women)),
+            Hispanic_missing = sum(is.na(Hispanic)),
+            White_missing = sum(is.na(White)),
+            Black_missing = sum(is.na(Black)),
+            Native_missing = sum(is.na(Native)),
+            Asian_missing = sum(is.na(Asian)),
+            Pacific_missing = sum(is.na(Pacific)),
+            Income_missing = sum(is.na(Income)),
+            Unemployment_missing = sum(is.na(Unemployment)))
+data_no_na <- data %>% drop_na()
+kbl(t(missing_sum), caption = "Summary of missing values") %>%
+  kable_paper("striped", full_width = F) %>%
+  pack_rows("Gender", 5, 6) %>%
+  pack_rows("Race", 7, 12)
+```
+
+According to the summary table above, there are 6102 missing values in the table in total. There are 696 missing values in each of the race columns, 1116 missing values in the income column, and 810 missing values in the unemployment column. I will remove all missing values since these columns are all important to my analysis. Given the large size of the dataset, this approach is viable and is not expected to result in a loss of sufficient data. Following the removal of missing values, the dataset contains 72884 rows and 14 columns
+
+### Data issues inspection
+
+```{r setup, message=FALSE, echo=FALSE, warning=FALSE}
+unem <- summary(data_no_na$Unemployment)
+knitr::kable(t(unem), "simple", caption = "Summary of unemployment rate") |>
+  kable_styling()%>%
+  kable_classic_2(full_width = F)
+```
+
+In order to identify any possible errors in the unemployment rate column, I have examined the range of values present in the column. The minimum unemployment rate is 0, while the maximum unemployment rate is 62.8. The median unemployment rate is 6. I will now take a look at the observations with the highest and lowest unemployment rates.
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE, max.height='100px'}
+top_10 <- data_no_na |>
+  slice_max(Unemployment, n=10) |>
+  select(TractId, Unemployment)
+kbl(top_10, caption = "Table for observations with the higest 10 unemployment rate")%>%
+  kable_paper() %>%
+  scroll_box(width = "1000px", height = "400px")
+```
+```{r, message=FALSE, echo=FALSE, warning=FALSE, max.height='100px'}
+b_10 <- data_no_na |>
+  slice_min(Unemployment, n=10) |>
+  select(TractId, Unemployment)
+kbl(b_10, caption = "Table for observations with the lowest 10 unemployment rate")%>%
+  kable_paper() %>%
+  scroll_box(width = "1000px", height = "400px")
+```
+
+Upon further examination of the top 10 and bottom 10 unemployment rates, it is evident that the maximum and minimum values of the unemployment rate column are not outliers, as there are many observations with similar levels of unemployment. 
+
+```{r, message=FALSE, echo=FALSE, include = FALSE, warning=FALSE}
+up10 <- data_no_na |>
+  filter(Unemployment > 10) |>
+  summarise(n = n())
+```
+```{r, message=FALSE, echo=FALSE, include = FALSE, warning=FALSE}
+down10 <- data_no_na |>
+  filter(Unemployment < 1) |>
+  summarise(n = n())
+updown <- rbind(c("Number of observations with unemployment rate more than 10", "Number of observations with unemployment rate less than 1"), c(14616, 1080))
+kbl(updown, format = "html")%>%
+   kable_paper("striped", full_width = F)
+```
+
+In fact, there are 14616 observations with an unemployment rate over 50 percent, and 1080 observations with an unemployment rate under 1 percent. Given the high number of observations with these values, I have decided to keep all observations in the dataset.
+
+## Exploratory plots of unemployment
+```{r, message=FALSE, echo=FALSE, warning=FALSE, fig.cap="plot for Unemployment Rate"}
+par(mfrow=c(1,2))
+boxplot(data_no_na$Unemployment,xlab='Unemployment Rate', main = 'Boxplot of Unemployment Rate')
+hist(data_no_na$Unemployment,xlab='Unemployment Rate', main = 'Histogram of Unemployment Rate')
+```
+Based on the histogram, it is evident that the unemployment rate column does not exhibit an even distribution. The distribution is heavily skewed and has a relatively short right tail. The majority of the values are centered between 0 to 10 percent; however, due to the large size of the dataset, there are still numerous outliers present in the data.
+
+# Preliminary Results
+
+I will now create simple summary plots and tables for analysis. 
+
+## Gender and Unemployment
+
+To investigate the potential relationship between gender and unemployment, I will introduce two new variables. The first variable, gender_ratio, will represent the ratio of men to women within each observation. The second variable, gender_dominance, will indicate whether one gender is more heavily represented than the other within each observation.
+
+To construct the gender_dominance variable, I will label the column as "women" when the gender_ratio is greater than or equal to 1.1, "men" when the gender_ratio is less than or equal to 0.95, and "even" when the gender_ratio falls between 0.95 and 1.1.
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE}
+data_no_na$gender_ratio = data_no_na$Women / data_no_na$Men
+data_new <- data_no_na %>% mutate(gender_dominance =
+                        case_when(gender_ratio >= 1.1 ~ "women", 
+                                  gender_ratio <= 0.95 ~ "men",
+                                  gender_ratio < 1.1 & gender_ratio > 0.95 ~ "even"))
+```
+
+I will now generate plots to visualize the relationship between unemployment and gender. 
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE, fig.cap="Plots for Unemployment vs Gender"}
+library(ggpubr)
+a <- ggplot(data = data_new, mapping = aes(x = Men, y = Unemployment)) +
+  geom_point() + 
+  labs(x = "Men", y = "Unemployment Rate", title = "Scatterplot: Men vs Unemployment") +
+  theme(text = element_text(size = 10))
+b <- ggplot(data = data_new, mapping = aes(x = Women, y = Unemployment)) +
+  geom_point() + 
+  labs(x = "Women", y = "Unemployment Rate", title = "Scatterplot: Women vs Unemployment") +
+  theme(text = element_text(size = 10))
+c <- ggplot(data = data_new, mapping = aes(x = gender_ratio, y = Unemployment)) +
+  geom_point() + 
+  labs(x = "Women to Men Ratio", y = "Unemployment Rate", title = "Scatterplot: Gender ratio vs Unemployment") +
+  theme(text = element_text(size = 10))
+d <- ggplot(data_new, aes(x=gender_dominance, y=Unemployment)) + 
+    geom_boxplot() +
+  labs(x = "Women to Men Ratio", y = "Unemployment Rate", title = "Scatterplot: Gender ratio vs Unemployment") +
+  theme(text = element_text(size = 10))
+ggarrange(a, b, c, d,
+          labels = c("A", "B", "C", "D"),
+          ncol = 2, nrow = 2) + theme(text = element_text(size = 15))
+```
+Based on the analysis of plots A, B, and C, I have observed that the relationship between the number of men and unemployment rate is not significantly different from that of women. In both plots, the unemployment rate starts at a value close to 0, drastically increases to its peak of 60 percent at around 1000, and then gradually decreases to below 20 percent after 5000. Furthermore, the boxplot in graph D demonstrates that the range, median, and number of outliers of the unemployment rate within the three groups of gender dominance are very similar, with all groups having a median value of approximately 7 to 8 percent.
+
+## Race and Unemployment
+
+To explore the relationship between race and unemployment, I created a new variable called other_races, which represents the proportion of non-white people in each observation. To better visualize any disparities in unemployment between white people and others, I focused on the top 10 counties in each state that are the most white-dominant, as well as the top 10 counties in each state that are the least white-dominant.
+
+
+```{r, message=FALSE, echo=FALSE, include=FALSE, warning=FALSE}
+data_extreme1 <- data_new |>
+  group_by(State) |>
+  slice_max(White, n = 10)
+data_extreme2 <- data_new |>
+  group_by(State) |>
+  slice_min(White, n = 10)
+data_extreme <- rbind(data_extreme1,data_extreme2)
+```
+
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE, fig.cap="Plots for Unemployment vs Race"}
+data_extreme$other_races = 100 - data_extreme$White
+A <- ggplot(data_new, aes(x=White)) + 
+  geom_histogram(binwidth=5) +
+  labs(x = "percentage of white people", title = "Histogram for white people percentage") +
+  theme(text = element_text(size = 10))
+B <- ggplot(data = data_extreme, mapping = aes(x = White, y = Unemployment)) +
+  geom_point() + 
+  labs(x = "White", y = "Unemployment Rate", title = "Scatterplot: White vs Unemployment") +
+  geom_smooth() +
+  theme(text = element_text(size = 10))
+C <- ggplot(data = data_extreme, mapping = aes(x = other_races, y = Unemployment)) +
+  geom_point() + 
+  labs(x = "Other races", y = "Unemployment Rate", title = "Scatterplot: Other races vs Unemployment") +
+  geom_smooth() +
+  theme(text = element_text(size = 10))
+ggarrange(A, B, C,
+          labels = c("A", "B", "C"),
+          ncol = 2, nrow = 2) + theme(text = element_text(size = 10))
+```
+
+Plot A shows a histogram of the white people ratio, which indicates that the distribution is bimodal with peaks at around 0 and 90 percent. The other regions have a more even and symmetric distribution, suggesting that the distribution of white people is fairly extreme.
+
+In plots B and C, we observe an inverse relationship between the proportion of white people and non-white people and their corresponding unemployment rates. Specifically, when the proportion of white people in a region increases, the unemployment rate tends to decrease slightly, while the opposite is observed when the proportion of non-white people increases. In both plots, the minimum unemployment rate is observed in the middle range of proportions.
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE}
+data_new$other_races = 100 - data_new$White
+white <- data_new |> filter(White > other_races)
+non_white <- data_new |> filter(White <= other_races)
+white_summary <- data.frame(unclass(summary(white)),  # Convert summary to data frame
+                           check.names = FALSE)
+white_dominant <- summary(white$Unemployment)
+non_white_dominant <- summary(non_white$Unemployment)
+sum <- rbind(white_dominant, non_white_dominant)
+knitr::kable(sum, "simple", caption = "Unemployment rate for white-dominant tract") %>%
+  kable_styling()
+```
+
+From the table above, it is clear that regions with a higher proportion of non-white people have higher unemployment rates. This is evident from the mean and third quartile values of unemployment rate in regions where non-white people are more populated than white people, which are higher than those in regions where there are more white people. These findings are consistent with the graphical results obtained earlier, which focused on extreme cases, and indicate a possible relationship between the number of white people in a community and its employment rate. 
+
+## State and Unemployment
+
+There are 52 different states in this dataset, which provides me sufficient reason to explore whether there is inconsistency between each state. 
+
+I will first create a barplot for visualization. 
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE, fig.cap="Barplot for Unemployment vs State"}
+ggplot(data = data_new, aes(x = Unemployment, y = State)) +
+  geom_bar(stat="identity") +
+  theme_minimal() + 
+  theme(text = element_text(size = 8)) +
+  labs(title = "Barplot for Unemployment vs State", x = "Sum of Unemployment rate", y = "State")
+
+```
+
+In the above barplot, each bar represents the sum of the unemployment rates of all observations in each state. We can observe that the unemployment rate is unevenly distributed across the 50 states, with the highest unemployment rate being in California and the lowest in Wyoming and North Dakota. However, it is important to note that this plot does not accurately reflect the employment situation in each state, as the number of tracts in each state is different.
+
+To get a better understanding of the average unemployment rate in each state, I will examine the 10 states with the highest and lowest average unemployment rates.
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE}
+data_mean <- data_new |>
+  group_by(State) |>
+  summarise(mean_ER = mean(Unemployment), n = n())
+
+most <- data_mean |>
+  arrange(desc(mean_ER)) |>
+  head(5)
+
+least <- data_mean |>
+  arrange(mean_ER)|>
+  head(5)
+
+avg <- rbind(most, least)
+knitr::kable(t(avg), "simple", caption = "Unemployment rate for 20 extreme states", table.attr = "style='width:30%;'") %>%
+  kable_styling()
+```
+
+The table above indicates a significant difference between the average unemployment rates of the top 5 and bottom 5 states. The maximum average unemployment rate is 18.711, while the minimum is 2.875. Therefore, it is reasonable to conclude that the employment situation in different states varies significantly.
+
+## Income and Unemployment
+
+Intuitively, income is negatively related to unemployment. That is, as the income of a region increases, the unemployment decreases. I will first take a look at the distribution of income.
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE, fig.cap="Histogram for Income"}
+ggplot(data_new, aes(x=Income)) + 
+ geom_histogram(aes(y=..density..), colour="black", fill="white")+
+ geom_density(alpha=.2, fill="#FF6666") 
+```
+Regarding the plot above, I observe that the income variable is distributed relatively evenly and symmetrically, with a mode around 50000 and a longer right tail.
+
+Moving on to the relationship between income and unemployment rate, I will plot the two variables together.
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE, fig.cap="Scatterplot for Unemployment vs Income"}
+ggplot(data = data_new, mapping = aes(x = Income, y = Unemployment)) +
+  geom_point() + 
+  labs(x = "Income", y = "Unemployment Rate", title = "Scatterplot: Income vs Unemployment") +
+  geom_smooth() +
+  theme(text = element_text(size = 10))
+```
+The graph above confirms our conventional understanding of the relationship between unemployment and income. We can observe that the unemployment rate peaks when the income is close to 0, decreases exponentially as the income increases up to 50000, and then gradually stabilizes as the income increases to 250000.
+
+In addition to the plot, a Pearson correlation test can be performed to directly examine the correlation between income and unemployment.
+```{r, message=FALSE, echo=FALSE, warning=FALSE}
+p = cor.test(data_new$Income, data_new$Unemployment, method="spearman")
+p_value <- c(p$p.value)
+correlation <- c(p$estimate)
+info <- data.frame(correlation, p_value)
+info
+```
+
+The results of the Pearson correlation test indicate that there is a moderate negative correlation of -0.4567973 between income and unemployment. This means that as income increases, unemployment tends to decrease. The p-value of 0 indicates that this correlation is statistically significant and unlikely to have occurred by chance. 
+
+Finally, I will establish a simple linear model between unemployment and income.
+```{r, message=FALSE, echo=FALSE, warning=FALSE}
+model <- lm(Unemployment ~ Income, data = data_new)
+coef <- summary(model)$coefficients
+R_squared <- c(summary(model)$r.squared, "", "", "", "")
+model_sum <- rbind(coef, R_squared)
+kbl(model_sum) |>
+  kable_paper()
+```
+
+The summary of the linear model established suggests that as income increase by 1 unit, the average unemployment rate tend to decrease by -7.65486661189482e-05. The p-value suggests that this coefficient is statistically significant. However, notice that the r-squared is only 0.208663741817316, indicating that our model only explains 20 percent of the variations in the data. 
+
+Overall, this supports the visual observation from the scatter plot that there is an association between income and unemployment.
+
+# Summary
+
+The analysis above indicates that there is no significant association between gender and unemployment in the U.S., which is in line with the ongoing efforts towards gender equality and providing equal opportunities for all genders. On the other hand, the plots examining the relationship between unemployment and race reveal that the unemployment rate tends to increase when there is either an overrepresentation or underrepresentation of white people in a community. Therefore, promoting diversity in the workforce and creating opportunities for all individuals regardless of their race can help address this issue.
+
+Finally, the relationship between income and unemployment is consistent with our intuitive understanding, where higher income is associated with lower unemployment rates. This highlights the importance of creating policies and programs that promote income growth and stability to reduce unemployment rates.
+
+## Limitations and improvements
+This analysis has several limitations that need to be considered. 
+
+* Firstly, the analysis mostly relies on graphical and tabular methods, which may not provide a comprehensive understanding of the underlying patterns in the data. 
+* Secondly, the data used in this analysis corresponds to tracts rather than individual people, which limits the ability to conduct more detailed analyses of individual-level factors such as race, gender, and commute method. * * * Thirdly, the only linear model implemented in this analysis yields a very low R-squared value, indicating that the model is far from being comprehensive. 
+* Finally, the data used in this analysis is from 2017, which was three years before the outbreak of the COVID-19 pandemic. Therefore, the data may not accurately reflect current unemployment rates or provide accurate predictions for future statistics.
+
+Possible improvements on the analysis include:
+
+* Firstly, establishing more complex models such as linear, multiple linear, generalized linear, and mixed-effect linear models can provide a better understanding of the relationships. 
+* Secondly, carrying out categorical variables can be beneficial. We can create variables based on the majority in each category such as white-dominant, non-white-dominant, men-dominant, women-dominant, etc.
+* Thirdly, implementing variable selection techniques can help in finding out the best predictors for the unemployment rate. 
+* Fourthly, conducting cross-validation on the best model can be helpful to evaluate its performance. 
+* Finally, accessing the most recent census data and comparing it to this data can help to explore how the ingredients of unemployment have changed over time.
+
+
+
+problems:
+1. more data work: web scraping, downloading raw data (e.g. in your case from the census). The kaggle datasets are already pre-processed to some degree. -- part 0 was good? Also downloaded from kaggle.
+2. How many total tracts are there in the US? -- Mentioned: the data now contains 74001 rows and 14 columns
+3. Are the missing values missing the entire tract, or just some data within a tract? Maps of these data would be very useful. -- Mentioned in the plot
+4.  Where are the tracts with highest and lowest unemployment? -- Answered with the 2 tables.
+5. I am also not clear on the gender ratio and the cutoff. men-to-women ratio, cut-off to indicate if one gender is significantly more populated than the other, to explore possible associations between gender and unemployment.
+6. In the barplot of unemployment by state, how are you summing up? --Mentioned: In the above barplot, each bar represents the sum of the unemployment rates of all observations in each state. 
+Is the x-axis population? -- no, it's the sum of unemployment rate, as labelled in the graph. 
+7. For correlation I would do spearmans rather than Pearsons. -- I did spearmans but it reports an error, so I was forced to do pearsons. 
+
+How many total tracts are there in the US? Are the missing values missing the entire tract, or just some data within a tract? Maps of these data would be very useful. You can get census data and shapefiles from NHGIS.org. Where are the tracts with highest and lowest unemployment? The plots of unemployment vs gender are not too informative. I am also not clear on the gender ratio and the cutoff. The unemployment rate variable is quite skewed, you may want to look at the median rather than the mean. Or log transform. In the barplot of unemployment by state, how are you summing up? Is the x-axis population? For correlation I would do spearmans rather than Pearsons. I think your ideas for future steps are good for the final project. Check out NHGIS and get updated data, you can also extract additional variables, possibly check whether there are changes in unempl pre and post covid, and make some maps.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
