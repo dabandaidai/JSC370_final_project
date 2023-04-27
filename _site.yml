@@ -16,7 +16,7 @@ navbar:
       href: https://www.linkedin.com/in/naihe-xiao-8b1215223/
 output:
   html_document:
-    theme: yeti
+    theme: simplex
     include:
       after_body: footer.html
     css: style.css
