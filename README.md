@@ -1,5 +1,8 @@
 # Introduction
 
+![pic](https://user-images.githubusercontent.com/90293930/234728294-8e6f76e8-7dfc-4d5d-9b32-d870ecffa423.jpeg)
+
+
 <br>
 
 ## Background
